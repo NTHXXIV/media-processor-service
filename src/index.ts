@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { createReadStream, createWriteStream, promises as fs, readFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { privateDecrypt } from 'node:crypto'
+import { privateDecrypt, constants } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -18,7 +18,10 @@ const payload = JSON.parse(readFileSync(payloadPath, 'utf-8'))
 const PRIVATE_KEY = process.env.TRANSCODER_PRIVATE_KEY
 
 function decrypt(encryptedValue: string): string {
-  if (!PRIVATE_KEY) return encryptedValue
+  if (!PRIVATE_KEY) {
+    console.warn('TRANSCODER_PRIVATE_KEY not set, using raw value.')
+    return encryptedValue
+  }
   try {
     const buffer = Buffer.from(encryptedValue, 'base64')
     return privateDecrypt(
@@ -29,8 +32,8 @@ function decrypt(encryptedValue: string): string {
       },
       buffer
     ).toString('utf-8')
-  } catch (e) {
-    console.warn('Decryption failed, using raw value.')
+  } catch (e: any) {
+    console.warn(`Decryption failed: ${e.message}. Using raw value.`)
     return encryptedValue
   }
 }
@@ -45,6 +48,17 @@ const SEGMENT_SECONDS = Number(payload.segment_seconds) || 6
 // Giải mã Key R2 nếu chúng được mã hóa
 const ACCESS_KEY_ID = decrypt(TARGET_R2_CONFIG.access_key_id)
 const SECRET_ACCESS_KEY = decrypt(TARGET_R2_CONFIG.secret_access_key)
+
+if (!ACCESS_KEY_ID || !SECRET_ACCESS_KEY) {
+  console.error('❌ Error: R2 Credentials are missing or could not be decrypted.')
+  process.exit(1)
+}
+
+// Check if it looks like it's still encrypted (too long for a standard access key)
+if (ACCESS_KEY_ID.length > 100) {
+  console.error('❌ Error: ACCESS_KEY_ID seems to be still encrypted or invalid. Check TRANSCODER_PRIVATE_KEY.')
+  process.exit(1)
+}
 
 type Variant = {
   name: string; width: number; height: number;
@@ -126,6 +140,7 @@ async function runTranscode() {
 }
 
 async function createHlsRenditions(inputPath: string, outputDir: string, variants: Variant[]) {
+  if (variants.length === 0) throw new Error('No variants specified')
   const encoder = 'libx264'
   const args = ['-y', '-i', inputPath]
   let filterComplex = variants.length > 1 ? `[0:v]split=${variants.length}` : `[0:v]copy[vs0];`
@@ -134,13 +149,13 @@ async function createHlsRenditions(inputPath: string, outputDir: string, variant
     filterComplex += ';'
   }
   for (let i = 0; i < variants.length; i++) {
-    const v = variants[i]
+    const v = variants[i]!
     filterComplex += `[vs${i}]scale=w=${v.width}:h=${v.height}:force_original_aspect_ratio=decrease,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2[v${i}out]`
     if (i < variants.length - 1) filterComplex += ';'
   }
   args.push('-filter_complex', filterComplex)
   for (let i = 0; i < variants.length; i++) {
-    const v = variants[i]
+    const v = variants[i]!
     args.push('-map', `[v${i}out]`, '-map', '0:a:0?', `-c:v:${i}`, encoder, `-b:v:${i}`, `${v.videoBitrateKbps}k`, `-maxrate:v:${i}`, `${v.maxRateKbps}k`, `-bufsize:v:${i}`, `${v.maxRateKbps * 2}k`, `-preset:v:${i}`, 'veryfast', `-profile:v:${i}`, 'main', `-g:v:${i}`, '48')
   }
   const streamMap = variants.map((v, i) => `v:${i},a:${i},name:${v.name}`).join(' ')
@@ -148,7 +163,7 @@ async function createHlsRenditions(inputPath: string, outputDir: string, variant
 
   return new Promise<void>((resolve, reject) => {
     const child = spawn('ffmpeg', args, { stdio: 'inherit' })
-    child.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg exited ${code}`)))
+    child.on('close', (code: number) => code === 0 ? resolve() : reject(new Error(`FFmpeg exited ${code}`)))
   })
 }
 
@@ -160,7 +175,7 @@ function buildMasterPlaylist(variants: Variant[]) {
 
 async function listFilesRecursive(dir: string): Promise<string[]> {
   const entries = await fs.readdir(dir, { withFileTypes: true })
-  const files = await Promise.all(entries.map(e => {
+  const files = await Promise.all(entries.map(async (e) => {
     const res = path.resolve(dir, e.name)
     return e.isDirectory() ? listFilesRecursive(res) : [res]
   }))
