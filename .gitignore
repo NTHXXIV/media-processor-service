@@ -3,3 +3,4 @@ dist/
 payload.json
 *.pem
 .DS_Store
+.env

@@ -18,12 +18,19 @@ const payload = JSON.parse(readFileSync(payloadPath, 'utf-8'))
 const PRIVATE_KEY = process.env.TRANSCODER_PRIVATE_KEY
 
 function decrypt(encryptedValue: string): string {
-  if (!PRIVATE_KEY) return encryptedValue // Nếu không có key giải mã, coi như là text thuần
+  if (!PRIVATE_KEY) return encryptedValue
   try {
     const buffer = Buffer.from(encryptedValue, 'base64')
-    return privateDecrypt(PRIVATE_KEY, buffer).toString('utf-8')
+    return privateDecrypt(
+      {
+        key: PRIVATE_KEY,
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256',
+      },
+      buffer
+    ).toString('utf-8')
   } catch (e) {
-    console.warn('Decryption failed, using raw value. Ensure you used the correct Public Key.')
+    console.warn('Decryption failed, using raw value.')
     return encryptedValue
   }
 }
