@@ -73,20 +73,24 @@ function resolveCallbackSecret(): string {
 
 async function sendCallback(body: Record<string, unknown>) {
   if (!CALLBACK_URL) return;
-  const callbackSecret = resolveCallbackSecret();
+  try {
+    const callbackSecret = resolveCallbackSecret();
 
-  const res = await fetch(CALLBACK_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-hls-callback-secret": callbackSecret,
-    },
-    body: JSON.stringify(body),
-  });
+    const res = await fetch(CALLBACK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-hls-callback-secret": callbackSecret,
+      },
+      body: JSON.stringify(body),
+    });
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`Callback failed ${res.status}: ${txt}`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.warn(`Callback failed ${res.status}: ${txt}`);
+    }
+  } catch (error) {
+    console.warn(`Callback request failed:`, error);
   }
 }
 
