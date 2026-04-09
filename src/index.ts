@@ -45,12 +45,18 @@ function decrypt(encryptedValue: string): string {
 
 // Map các giá trị từ payload
 const SOURCE_URL = payload.source_url;
-const LESSON_ID = payload.lesson_id;
+const LESSON_ID =
+  typeof payload.lesson_id === "string" ? payload.lesson_id.trim() : "";
 const CALLBACK_CLIENT_ID = payload.callback_client_id;
 const TARGET_R2_CONFIG = payload.target_r2_config;
 const VARIANTS_CSV = payload.variants || "480p,720p";
 const CALLBACK_URL = payload.callback_url;
 const SEGMENT_SECONDS = Number(payload.segment_seconds) || 6;
+
+if (!LESSON_ID) {
+  console.error("❌ Error: Missing or invalid payload.lesson_id");
+  process.exit(1);
+}
 
 function toSecretKey(id: string) {
   return `HLS_CALLBACK_SECRET_${id.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`;
@@ -209,6 +215,9 @@ async function runTranscode() {
     }
 
     const masterUrl = `${TARGET_R2_CONFIG.public_base_url.replace(/\/$/, "")}/${TARGET_R2_CONFIG.prefix}/master.m3u8`;
+    if (!masterUrl.startsWith("https://")) {
+      throw new Error("hlsManifestUrl must be an HTTPS URL");
+    }
     console.log(`✅ Success: ${masterUrl}`);
     await sendCallback({
       lessonId: LESSON_ID,
