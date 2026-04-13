@@ -51,12 +51,10 @@ jobs:
           HLS_CALLBACK_SECRET: ${{ secrets.HLS_CALLBACK_SECRET }}
           HLS_CALLBACK_SECRET_STAGAPPS_SANDBOX: ${{ secrets.HLS_CALLBACK_SECRET_STAGAPPS_SANDBOX }}
           HLS_CALLBACK_SECRET_STAGAPPS_PROD: ${{ secrets.HLS_CALLBACK_SECRET_STAGAPPS_PROD }}
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          echo "Callback URL: ${{ github.event.client_payload.callback_url }}"
-          echo "Callback client: ${{ github.event.client_payload.callback_client_id }}"
-
-          # Ghi payload ra file để script đọc trực tiếp, tránh rò rỉ qua ENV
-          echo '${{ toJson(github.event.client_payload) }}' > payload.json
+          # Ghi payload ra file thông qua biến môi trường để tránh lộ log
+          node -e "require('fs').writeFileSync('payload.json', process.env.CLIENT_PAYLOAD)"
 
           # Chạy transcoder với file payload
           npx tsx src/index.ts payload.json
