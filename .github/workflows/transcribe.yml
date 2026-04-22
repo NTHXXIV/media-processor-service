@@ -10,9 +10,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mask Sensitive Payload
+      # Ghi payload trực tiếp vào file mà không thông qua biến môi trường ENV công khai
+      - name: Create Payload File
         run: |
-          echo "::add-mask::${{ toJson(github.event.client_payload) }}"
+          cat << 'EOF' > payload.json
+          ${{ toJson(github.event.client_payload) }}
+          EOF
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -53,7 +56,5 @@ jobs:
           ALLOWED_CALLBACK_DOMAINS: ${{ secrets.ALLOWED_CALLBACK_DOMAINS }}
           HLS_CALLBACK_SECRET_STAGAPPS_SANDBOX: ${{ secrets.HLS_CALLBACK_SECRET_STAGAPPS_SANDBOX }}
           HLS_CALLBACK_SECRET_STAGAPPS_PROD: ${{ secrets.HLS_CALLBACK_SECRET_STAGAPPS_PROD }}
-          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          node -e "require('fs').writeFileSync('payload.json', process.env.CLIENT_PAYLOAD)"
           npx tsx src/transcribe/index.ts payload.json
