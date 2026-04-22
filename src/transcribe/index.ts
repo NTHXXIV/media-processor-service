@@ -126,7 +126,7 @@ export async function runTranscriptionJob() {
     const whisperScript = path.join(__dirname, "whisper_runner.py");
     
     const whisperResult = await new Promise((resolve, reject) => {
-      const pythonArgs = [whisperScript, localAudio, MODEL_SIZE, initial_prompt];
+      const pythonArgs = [whisperScript, localAudio, MODEL_SIZE, initialPrompt];
       const pythonProcess = spawn("python3", pythonArgs);
       let stdout = "";
 
