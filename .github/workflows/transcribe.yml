@@ -26,6 +26,9 @@ jobs:
           python-version: "3.10"
           cache: "pip"
 
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+
       - name: Cache Whisper Models
         uses: actions/cache@v4
         with:
@@ -34,15 +37,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-whisper-models-
 
-      # KHÔNG CẦN apt-get install ffmpeg vì ubuntu-latest đã có sẵn
-
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Install Node Dependencies
-        run: npm ci || npm install # Ưu tiên ci cho tốc độ, fallback install
+        run: npm ci || npm install
 
       - name: Run Transcriber
         env:
