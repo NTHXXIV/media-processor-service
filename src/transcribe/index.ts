@@ -126,16 +126,16 @@ export async function runTranscriptionJob() {
     const whisperScript = path.join(__dirname, "whisper_runner.py");
     
     const whisperResult = await new Promise((resolve, reject) => {
-      const pythonArgs = [whisperScript, localAudio, MODEL_SIZE, initialPrompt];
+      const pythonArgs = [whisperScript, localAudio, MODEL_SIZE, initial_prompt];
       const pythonProcess = spawn("python3", pythonArgs);
       let stdout = "";
-      let stderr = "";
 
       pythonProcess.stdout.on("data", (data) => stdout += data.toString());
-      pythonProcess.stderr.on("data", (data) => stderr += data.toString());
+      // Pipe stderr to main stderr to see progress in real-time
+      pythonProcess.stderr.on("data", (data) => process.stderr.write(data));
 
       pythonProcess.on("close", (code) => {
-        if (code !== 0) return reject(new Error(`Whisper failed with code ${code}: ${stderr}`));
+        if (code !== 0) return reject(new Error(`Whisper failed with code ${code}`));
         try {
           resolve(JSON.parse(stdout));
         } catch (e) {
@@ -143,6 +143,7 @@ export async function runTranscriptionJob() {
         }
       });
     });
+
 
     // 4. Structure & Clean result
     console.log(`✨ Cleaning transcript with Gemini...`);
