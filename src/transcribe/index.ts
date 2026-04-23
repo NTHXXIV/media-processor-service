@@ -39,7 +39,7 @@ async function uploadToR2(payload: any, resultPath: string) {
 
 export async function runTranscriptionJob() {
   const payloadPath = process.argv[2];
-  const mode = process.argv[3]; // --whisper or --clean
+  const mode = process.argv[3]; 
 
   if (!payloadPath) process.exit(1);
   const payload = JSON.parse(readFileSync(payloadPath, "utf-8"));
@@ -49,18 +49,15 @@ export async function runTranscriptionJob() {
   try {
     await fs.mkdir(workingDir, { recursive: true });
 
-    // --- MODE: WHISPER (ONLY) ---
+    // --- MODE: WHISPER ---
     if (mode === "--whisper") {
-      console.log(`🎙️ Running Whisper for job ${jobId}`);
-      
+      console.log(`🎙️ Running Whisper: ${jobId}`);
       const localVideo = path.join(workingDir, "video");
       const localAudio = path.join(workingDir, "audio.wav");
       const resultPath = path.join(workingDir, "raw.json");
 
-      // Initial callback
-      await sendCallback(payload.callback_url, { lessonId: payload.lesson_id, jobId: payload.job_id, status: "processing" }, payload.callback_client_id);
+      await sendCallback(payload.callback_url, { lessonId: payload.lesson_id, jobId: payload.job_id, status: "whisper_processing" }, payload.callback_client_id);
 
-      // Processing
       const response = await fetch(payload.source_url);
       await pipeline(Readable.fromWeb(response.body! as any), createWriteStream(localVideo));
       const durationSeconds = await getVideoDuration(localVideo);
@@ -71,7 +68,7 @@ export async function runTranscriptionJob() {
         let stdout = "";
         pythonProcess.stdout.on("data", (d) => stdout += d);
         pythonProcess.stderr.on("data", (d) => process.stderr.write(d));
-        pythonProcess.on("close", (c) => c === 0 ? resolve(JSON.parse(stdout)) : reject(new Error("Whisper failed")));
+        pythonProcess.on("close", (c) => c === 0 ? resolve(JSON.parse(stdout)) : reject(new Error("Whisper engine failed")));
       });
 
       const finalResult = {
@@ -84,17 +81,17 @@ export async function runTranscriptionJob() {
 
       const transcriptUrl = await uploadToR2(payload, resultPath);
       await sendCallback(payload.callback_url, {
-        lessonId: payload.lesson_id, jobId: payload.job_id, status: "transcription_ready",
+        lessonId: payload.lesson_id, jobId: payload.job_id, status: "whisper_success",
         transcriptUrl, fullText: finalResult.fullText, segments: finalResult.segments, metadata: finalResult.metadata
       }, payload.callback_client_id);
-      
-      console.log(`✅ Whisper Done: ${transcriptUrl}`);
     }
 
-    // --- MODE: CLEAN (ONLY) ---
+    // --- MODE: CLEAN ---
     if (mode === "--clean") {
-      console.log(`✨ Running Gemini Clean for job ${jobId}`);
-      if (!payload.raw) throw new Error("Missing 'raw' data in payload");
+      console.log(`✨ Running Clean: ${jobId}`);
+      if (!payload.raw) throw new Error("Missing 'raw' data");
+
+      await sendCallback(payload.callback_url, { lessonId: payload.lesson_id, jobId: payload.job_id, status: "clean_processing" }, payload.callback_client_id);
 
       const { cleanedFullText, cleanedSegments, summary, keywords } = await cleanTranscript(payload.raw.segments);
       const finalSegments = cleanedSegments.filter((s: any) => s.text && s.text.trim().length > 0);
@@ -113,18 +110,15 @@ export async function runTranscriptionJob() {
       const transcriptUrl = await uploadToR2(payload, resultPath);
 
       await sendCallback(payload.callback_url, {
-        lessonId: payload.lesson_id, jobId: payload.job_id, status: "transcription_cleaned",
+        lessonId: payload.lesson_id, jobId: payload.job_id, status: "clean_success",
         transcriptUrl, fullText: finalResult.fullText, segments: finalResult.segments, metadata: finalResult.metadata
       }, payload.callback_client_id);
-
-      console.log(`✅ Clean Done: ${transcriptUrl}`);
     }
 
   } catch (error: any) {
     console.error(`❌ Error: ${error.message}`);
-    if (mode === "--whisper") {
-      await sendCallback(payload.callback_url, { lessonId: payload.lesson_id, jobId: payload.job_id, status: "failed", error: error.message }, payload.callback_client_id);
-    }
+    const status = mode === "--whisper" ? "whisper_failed" : "clean_failed";
+    await sendCallback(payload.callback_url, { lessonId: payload.lesson_id, jobId: payload.job_id, status, error: error.message }, payload.callback_client_id);
     process.exit(1);
   } finally {
     await fs.rm(workingDir, { recursive: true, force: true }).catch(() => {});

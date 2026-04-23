@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
 export interface TranscriptSegment {
   start: number;
@@ -6,43 +7,14 @@ export interface TranscriptSegment {
   text: string;
 }
 
-async function retryWithDelay(fn: () => Promise<any>, retries = 3, delay = 2000): Promise<any> {
-  try {
-    return await fn();
-  } catch (error: any) {
-    if (retries <= 0 || (error.status !== 503 && error.status !== 429)) throw error;
-    console.warn(`⚠️ Gemini API busy (status ${error.status}). Retrying in ${delay}ms... (${retries} left)`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-    return retryWithDelay(fn, retries - 1, delay * 2);
-  }
-}
-
-export async function cleanTranscript(segments: TranscriptSegment[]): Promise<{ 
-  cleanedFullText: string; 
-  cleanedSegments: TranscriptSegment[];
-  summary: string;
-  keywords: string[];
-}> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const rawFullText = segments.map(s => s.text).join(" ");
-
-  if (!apiKey) {
-    console.warn("⚠️ GEMINI_API_KEY is not set. Skipping cleaning.");
-    return { cleanedFullText: rawFullText, cleanedSegments: segments, summary: "", keywords: [] };
-  }
-
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-
-    const prompt = `
+const PROMPT_TEMPLATE = (segmentsJson: string) => `
 Bạn là một trợ lý AI chuyên nghiệp xử lý nội dung video.
 NHIỆM VỤ:
 1. LÀM SẠCH VĂN BẢN: Sửa lỗi chính tả, loại bỏ từ đệm, sửa câu lủng củng trong danh sách "segments" bên dưới.
 2. TÓM TẮT: Viết một đoạn tóm tắt nội dung chính (khoảng 2-3 câu).
 3. TỪ KHÓA: Trích xuất 5-7 từ khóa quan trọng nhất.
 
-YÊU CẦU ĐẦU RA: Trả về 1 JSON duy nhất, không kèm giải thích.
+YÊU CẦU ĐẦU RA: Trả về duy nhất 1 JSON, không kèm giải thích.
 Cấu trúc JSON:
 {
   "cleanedSegments": [{ "start": number, "end": number, "text": string }],
@@ -52,29 +24,62 @@ Cấu trúc JSON:
 }
 
 INPUT JSON:
-${JSON.stringify(segments)}
+${segmentsJson}
 `;
 
-    const result = await retryWithDelay(() => model.generateContent(prompt));
-    const response = await result.response;
-    const text = response.text();
-    
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const output = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
+async function cleanWithGemini(segments: TranscriptSegment[]): Promise<any> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("No Gemini API Key");
 
-    return {
-      cleanedFullText: output.cleanedFullText || rawFullText,
-      cleanedSegments: output.cleanedSegments || segments,
-      summary: output.summary || "",
-      keywords: output.keywords || []
-    };
-  } catch (error: any) {
-    console.error("❌ Error cleaning transcript with Gemini:", error.message || error);
-    return { 
-      cleanedFullText: rawFullText, 
-      cleanedSegments: segments, 
-      summary: "", 
-      keywords: [] 
-    }; 
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+  
+  const result = await model.generateContent(PROMPT_TEMPLATE(JSON.stringify(segments)));
+  const text = result.response.text();
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+}
+
+async function cleanWithGroq(segments: TranscriptSegment[]): Promise<any> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error("No Groq API Key");
+
+  const groq = new Groq({ apiKey });
+  const completion = await groq.chat.completions.create({
+    messages: [{ role: "user", content: PROMPT_TEMPLATE(JSON.stringify(segments)) }],
+    model: "llama-3.3-70b-versatile", // Model mạnh nhất và hỗ trợ context lớn của Groq
+    response_format: { type: "json_object" }
+  });
+
+  return JSON.parse(completion.choices[0]?.message?.content || "{}");
+}
+
+export async function cleanTranscript(segments: TranscriptSegment[]) {
+  const rawFullText = segments.map(s => s.text).join(" ");
+  
+  // 1. Thử dùng Gemini trước
+  try {
+    console.log("💎 Attempting clean with Gemini...");
+    return await cleanWithGemini(segments);
+  } catch (geminiError: any) {
+    console.warn(`⚠️ Gemini failed: ${geminiError.message}`);
+    
+    // 2. Fallback sang Groq nếu có Key
+    if (process.env.GROQ_API_KEY) {
+      try {
+        console.log("🚀 Gemini failed or busy. Falling back to Groq (Llama 3)...");
+        return await cleanWithGroq(segments);
+      } catch (groqError: any) {
+        console.error(`❌ Groq also failed: ${groqError.message}`);
+      }
+    }
   }
+
+  // 3. Cuối cùng: Trả về bản thô nếu tất cả AI đều fail
+  return {
+    cleanedFullText: rawFullText,
+    cleanedSegments: segments,
+    summary: "",
+    keywords: []
+  };
 }
