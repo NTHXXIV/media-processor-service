@@ -19,6 +19,16 @@ import { cleanTranscript } from "./cleaner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Validates the mandatory fields in the payload (Exported for Testing)
+ */
+export function validatePayload(payload: any) {
+  const { lesson_id, source_url, target_r2_config } = payload;
+  if (!lesson_id || !source_url || !target_r2_config) {
+    throw new Error("Missing mandatory fields (lesson_id, source_url, target_r2_config)");
+  }
+}
+
 async function uploadToR2(payload: any, resultPath: string) {
   const PRIVATE_KEY = process.env.TRANSCODER_PRIVATE_KEY;
   const { target_r2_config } = payload;
@@ -47,6 +57,7 @@ export async function runTranscriptionJob() {
   const workingDir = path.join(os.tmpdir(), `transcribe-${jobId}-${Date.now()}`);
 
   try {
+    validatePayload(payload);
     await fs.mkdir(workingDir, { recursive: true });
 
     // --- MODE: WHISPER ---
