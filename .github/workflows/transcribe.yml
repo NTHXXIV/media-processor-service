@@ -55,13 +55,19 @@ jobs:
           node -e "require('fs').writeFileSync('payload.json', process.env.PAYLOAD_JSON)"
           npx tsx src/transcribe/index.ts payload.json --stage=whisper
 
+      - name: Prepare Artifact
+        run: |
+          # Use lesson_id if job_id is missing to find the directory
+          ID="${{ github.event.client_payload.job_id || github.event.client_payload.lesson_id }}"
+          mkdir -p ./dist-transcribe
+          sudo cp /tmp/transcribe-job-$ID/intermediate.json ./dist-transcribe/
+          cp payload.json ./dist-transcribe/
+
       - name: Upload Intermediate Data
         uses: actions/upload-artifact@v4
         with:
-          name: transcribe-data-${{ github.event.client_payload.job_id }}
-          path: |
-            /tmp/transcribe-job-${{ github.event.client_payload.job_id }}/
-            payload.json
+          name: transcribe-data-${{ github.event.client_payload.job_id || github.event.client_payload.lesson_id }}
+          path: ./dist-transcribe/
           retention-days: 1
 
   post_process:
@@ -87,20 +93,16 @@ jobs:
         if: needs.transcribe.result == 'success'
         uses: actions/download-artifact@v4
         with:
-          name: transcribe-data-${{ github.event.client_payload.job_id }}
-          path: . 
+          name: transcribe-data-${{ github.event.client_payload.job_id || github.event.client_payload.lesson_id }}
+          path: ./dist-transcribe/ 
 
       - name: Restore Working Dir
         if: needs.transcribe.result == 'success'
         run: |
-          JOB_ID="${{ github.event.client_payload.job_id }}"
-          TARGET_DIR="/tmp/transcribe-job-$JOB_ID"
+          ID="${{ github.event.client_payload.job_id || github.event.client_payload.lesson_id }}"
+          TARGET_DIR="/tmp/transcribe-job-$ID"
           sudo mkdir -p "$TARGET_DIR"
-          if [ -d "./tmp" ]; then
-             sudo cp -r ./tmp/transcribe-job-$JOB_ID/* "$TARGET_DIR/"
-          else
-             sudo cp intermediate.json "$TARGET_DIR/" || true
-          fi
+          sudo cp ./dist-transcribe/* "$TARGET_DIR/"
 
       - name: Run Phase 2 (Gemini)
         env:
@@ -112,6 +114,8 @@ jobs:
           HLS_CALLBACK_SECRET_STAGAPPS_PROD: ${{ secrets.HLS_CALLBACK_SECRET_STAGAPPS_PROD }}
           PAYLOAD_JSON: ${{ toJson(github.event.client_payload) }}
         run: |
-          # Create payload.json only if not restored from artifact
-          node -e "if (!require('fs').existsSync('payload.json')) require('fs').writeFileSync('payload.json', process.env.PAYLOAD_JSON)"
+          # Use payload from artifact if exists, otherwise create from env
+          if [ ! -f payload.json ]; then
+            node -e "require('fs').writeFileSync('payload.json', process.env.PAYLOAD_JSON)"
+          fi
           npx tsx src/transcribe/index.ts payload.json --stage=gemini

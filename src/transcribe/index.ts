@@ -29,7 +29,6 @@ export function validatePayload(payload: any) {
 async function uploadToR2(payload: any, resultPath: string) {
   const PRIVATE_KEY = process.env.TRANSCODER_PRIVATE_KEY;
   const { target_r2_config } = payload;
-  
   const ACCESS_KEY_ID = decrypt(target_r2_config.access_key_id, PRIVATE_KEY!);
   const SECRET_ACCESS_KEY = decrypt(target_r2_config.secret_access_key, PRIVATE_KEY!);
   const client = createR2Client(target_r2_config.endpoint, ACCESS_KEY_ID, SECRET_ACCESS_KEY);
@@ -51,27 +50,27 @@ export async function runTranscriptionJob() {
 
   if (!payloadPath) process.exit(1);
   const payload = JSON.parse(readFileSync(payloadPath, "utf-8"));
-  const JOB_ID = payload.job_id;
-  const workingDir = path.join(os.tmpdir(), `transcribe-job-${JOB_ID || 'default'}`);
+  
+  // Use job_id if available, otherwise fallback to lesson_id (which is mandatory)
+  const jobId = payload.job_id || payload.lesson_id;
+  const workingDir = path.join(os.tmpdir(), `transcribe-job-${jobId}`);
+  
   const intermediatePath = path.join(workingDir, "intermediate.json");
   const resultJsonPath = path.join(workingDir, "transcript.json");
 
   try {
     validatePayload(payload);
 
-    // --- PHASE 1: WHISPER (MUST SUCCEED) ---
     if (!stage || stage === "--stage=whisper") {
-      console.log(`🎙️ Phase 1: Whisper started...`);
+      console.log(`🎙️ Phase 1: Whisper started for job ${jobId}`);
       await fs.mkdir(workingDir, { recursive: true });
       
-      // Nếu callback đầu tiên thất bại, dừng ngay để tránh phí tài nguyên
       try {
         await sendCallback(payload.callback_url, {
-          lessonId: payload.lesson_id, jobId: JOB_ID, status: "processing",
+          lessonId: payload.lesson_id, jobId: payload.job_id, status: "processing",
         }, payload.callback_client_id);
-      } catch (cbError: any) {
-        console.error(`❌ Critical: Initial callback failed. Stopping job. Error: ${cbError.message}`);
-        process.exit(1);
+      } catch (e) {
+        console.error("⚠️ Initial callback failed, but continuing...");
       }
 
       const localVideo = path.join(workingDir, "source_video");
@@ -94,9 +93,8 @@ export async function runTranscriptionJob() {
         });
       });
 
-      // Save initial RAW result
       const initialResult = {
-        jobId: JOB_ID, lessonId: payload.lesson_id,
+        jobId: payload.job_id, lessonId: payload.lesson_id,
         metadata: { title: payload.title, durationSeconds, model: payload.model_size, isCleaned: false },
         fullText: whisperResult.full_text,
         segments: whisperResult.segments
@@ -104,29 +102,36 @@ export async function runTranscriptionJob() {
       await fs.writeFile(resultJsonPath, JSON.stringify(initialResult, null, 2));
       await fs.writeFile(intermediatePath, JSON.stringify({ whisperResult, durationSeconds }));
 
-      // UPLOAD RAW IMMEDIATELY
       const transcriptUrl = await uploadToR2(payload, resultJsonPath);
       await sendCallback(payload.callback_url, {
-        lessonId: payload.lesson_id, jobId: JOB_ID, status: "transcription_ready",
+        lessonId: payload.lesson_id, jobId: payload.job_id, status: "transcription_ready",
         transcriptUrl, fullText: initialResult.fullText, segments: initialResult.segments, metadata: initialResult.metadata
       }, payload.callback_client_id);
       
-      console.log(`✅ Phase 1: Raw Transcription ready at ${transcriptUrl}`);
+      console.log(`✅ Phase 1: Raw Transcription ready.`);
     }
 
-    // --- PHASE 2: GEMINI (OPTIONAL ENHANCEMENT) ---
     if (!stage || stage === "--stage=gemini") {
-      console.log(`✨ Phase 2: AI Cleaning...`);
-      const intermediate = JSON.parse(await fs.readFile(intermediatePath, "utf-8"));
-      const { whisperResult, durationSeconds } = intermediate;
+      console.log(`✨ Phase 2: AI Cleaning for job ${jobId}...`);
+      
+      let whisperResult: any;
+      let durationSeconds: number;
+
+      if (payload.raw_segments) {
+        whisperResult = { segments: payload.raw_segments, language: payload.language || "vi", full_text: payload.raw_full_text || "" };
+        durationSeconds = payload.duration_seconds || 0;
+      } else {
+        if (!readFileSync(intermediatePath)) throw new Error(`Intermediate file not found at ${intermediatePath}`);
+        const intermediate = JSON.parse(readFileSync(intermediatePath, "utf-8"));
+        whisperResult = intermediate.whisperResult;
+        durationSeconds = intermediate.durationSeconds;
+      }
 
       const { cleanedFullText, cleanedSegments, summary, keywords } = await cleanTranscript(whisperResult.segments);
 
       const finalResult = {
-        jobId: JOB_ID, lessonId: payload.lesson_id,
-        metadata: {
-          title: payload.title, durationSeconds, isCleaned: true, summary, keywords
-        },
+        jobId: payload.job_id, lessonId: payload.lesson_id,
+        metadata: { title: payload.title, durationSeconds, isCleaned: true, summary, keywords },
         fullText: cleanedFullText,
         rawFullText: whisperResult.full_text,
         segments: cleanedSegments,
@@ -137,7 +142,7 @@ export async function runTranscriptionJob() {
       const transcriptUrl = await uploadToR2(payload, resultJsonPath);
 
       await sendCallback(payload.callback_url, {
-        lessonId: payload.lesson_id, jobId: JOB_ID, status: "transcription_cleaned",
+        lessonId: payload.lesson_id, jobId: payload.job_id, status: "transcription_cleaned",
         transcriptUrl, fullText: finalResult.fullText, segments: finalResult.segments, metadata: finalResult.metadata
       }, payload.callback_client_id);
 
@@ -146,10 +151,9 @@ export async function runTranscriptionJob() {
 
   } catch (error: any) {
     console.error(`❌ Job Failed: ${error?.message}`);
-    // Chỉ báo lỗi nếu là Phase 1 (vì Phase 2 có thể retry sau)
-    if (stage === "--stage=whisper") {
+    if (!stage || stage === "--stage=whisper") {
       await sendCallback(payload.callback_url, {
-        lessonId: payload.lesson_id, jobId: JOB_ID, status: "failed", error: error?.message,
+        lessonId: payload.lesson_id, jobId: payload.job_id, status: "failed", error: error?.message,
       }, payload.callback_client_id);
     }
     process.exit(1);
