@@ -110,22 +110,31 @@ export async function runTranscriptionJob() {
       
       console.log(`✅ Phase 1: Raw Transcription ready.`);
     }
+// --- PHASE 2: GEMINI & CALLBACK ---
+if (!stage || stage === "--stage=gemini") {
+  console.log(`✨ Phase 2: AI Cleaning for job ${jobId}...`);
 
-    if (!stage || stage === "--stage=gemini") {
-      console.log(`✨ Phase 2: AI Cleaning for job ${jobId}...`);
-      
-      let whisperResult: any;
-      let durationSeconds: number;
+  let whisperResult: any;
+  let durationSeconds: number;
 
-      if (payload.raw_segments) {
-        whisperResult = { segments: payload.raw_segments, language: payload.language || "vi", full_text: payload.raw_full_text || "" };
-        durationSeconds = payload.duration_seconds || 0;
-      } else {
-        if (!readFileSync(intermediatePath)) throw new Error(`Intermediate file not found at ${intermediatePath}`);
-        const intermediate = JSON.parse(readFileSync(intermediatePath, "utf-8"));
-        whisperResult = intermediate.whisperResult;
-        durationSeconds = intermediate.durationSeconds;
-      }
+  // Ưu tiên lấy dữ liệu thô từ payload.raw (đã gộp để tránh giới hạn 10 properties của GitHub)
+  if (payload.raw) {
+    console.log("📦 Using raw data from payload object...");
+    whisperResult = {
+      segments: payload.raw.segments || [],
+      language: payload.raw.language || "vi",
+      full_text: payload.raw.full_text || ""
+    };
+    durationSeconds = payload.raw.duration_seconds || 0;
+  } else {
+    // Fallback: Đọc từ file trung gian (luồng tự động trong GitHub)
+    console.log("📂 Reading from intermediate file...");
+    if (!readFileSync(intermediatePath)) throw new Error(`Intermediate file not found at ${intermediatePath}`);
+    const intermediate = JSON.parse(readFileSync(intermediatePath, "utf-8"));
+    whisperResult = intermediate.whisperResult;
+    durationSeconds = intermediate.durationSeconds;
+  }
+
 
       const { cleanedFullText, cleanedSegments, summary, keywords } = await cleanTranscript(whisperResult.segments);
 

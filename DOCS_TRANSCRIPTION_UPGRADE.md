@@ -20,11 +20,13 @@ Khi BE kích hoạt GitHub Action qua `repository_dispatch`, hãy lưu ý các c
 *   **`initial_prompt` (String)**: Gợi ý cho Whisper về ngôn ngữ và thuật ngữ (Ví dụ: "Video tiếng Việt về tài chính, VN-Index...").
 
 ### B. Chế độ "Chỉ làm sạch" (Clean-only)
-Nếu bạn đã có bản thô (raw) và chỉ muốn AI làm sạch lại (mà không muốn chạy lại Whisper tốn 15-20 phút), hãy gửi payload với cấu trúc:
+Nếu bạn đã có bản thô (raw) và chỉ muốn AI làm sạch lại (mà không muốn chạy lại Whisper tốn 15-20 phút), hãy gửi payload với cấu trúc gọn gàng (đảm bảo không quá 10 top-level properties):
 *   **`stage`**: Gán giá trị `"gemini"`.
-*   **`raw_segments` (Array)**: Mảng các segment thô đã lưu trong DB.
-*   **`raw_full_text` (String)**: Toàn bộ văn bản thô.
-*   **`duration_seconds` (Number)**: Thời lượng video.
+*   **`raw`**: Object chứa dữ liệu thô:
+    *   **`segments` (Array)**: Mảng các segment thô.
+    *   **`full_text` (String)**: Văn bản thô.
+    *   **`duration_seconds` (Number)**: Thời lượng video.
+    *   **`language` (String)**: Mã ngôn ngữ (VD: "vi").
 
 ---
 
