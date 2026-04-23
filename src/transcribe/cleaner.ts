@@ -6,6 +6,17 @@ export interface TranscriptSegment {
   text: string;
 }
 
+async function retryWithDelay(fn: () => Promise<any>, retries = 3, delay = 2000): Promise<any> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    if (retries <= 0 || (error.status !== 503 && error.status !== 429)) throw error;
+    console.warn(`⚠️ Gemini API busy (status ${error.status}). Retrying in ${delay}ms... (${retries} left)`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    return retryWithDelay(fn, retries - 1, delay * 2);
+  }
+}
+
 export async function cleanTranscript(segments: TranscriptSegment[]): Promise<{ 
   cleanedFullText: string; 
   cleanedSegments: TranscriptSegment[];
@@ -16,30 +27,22 @@ export async function cleanTranscript(segments: TranscriptSegment[]): Promise<{
   const rawFullText = segments.map(s => s.text).join(" ");
 
   if (!apiKey) {
-    console.warn("⚠️ GEMINI_API_KEY not found. Skipping text cleaning.");
-    return { 
-      cleanedFullText: rawFullText, 
-      cleanedSegments: segments,
-      summary: "",
-      keywords: []
-    };
+    console.warn("⚠️ GEMINI_API_KEY is not set. Skipping cleaning.");
+    return { cleanedFullText: rawFullText, cleanedSegments: segments, summary: "", keywords: [] };
   }
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    // Use the latest flash model as verified by user's curl test
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-flash-latest" 
-    });
+    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
 
     const prompt = `
 Bạn là một trợ lý AI chuyên nghiệp xử lý nội dung video.
 NHIỆM VỤ:
-1. LÀM SẠCH VĂN BẢN: Sửa lỗi chính tả, loại bỏ từ đệm, sửa câu lủng củng trong danh sách "segments" được cung cấp bên dưới.
+1. LÀM SẠCH VĂN BẢN: Sửa lỗi chính tả, loại bỏ từ đệm, sửa câu lủng củng trong danh sách "segments" bên dưới.
 2. TÓM TẮT: Viết một đoạn tóm tắt nội dung chính (khoảng 2-3 câu).
 3. TỪ KHÓA: Trích xuất 5-7 từ khóa quan trọng nhất.
 
-YÊU CẦU ĐẦU RA: Trả về một JSON duy nhất, không kèm văn bản giải thích.
+YÊU CẦU ĐẦU RA: Trả về 1 JSON duy nhất, không kèm giải thích.
 Cấu trúc JSON:
 {
   "cleanedSegments": [{ "start": number, "end": number, "text": string }],
@@ -52,11 +55,10 @@ INPUT JSON:
 ${JSON.stringify(segments)}
 `;
 
-    const result = await model.generateContent(prompt);
+    const result = await retryWithDelay(() => model.generateContent(prompt));
     const response = await result.response;
     const text = response.text();
     
-    // Parse JSON from response (handling potential markdown blocks)
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const output = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
 
@@ -66,8 +68,13 @@ ${JSON.stringify(segments)}
       summary: output.summary || "",
       keywords: output.keywords || []
     };
-  } catch (error) {
-    console.error("❌ Error cleaning transcript with Gemini:", error);
-    return { cleanedFullText: rawFullText, cleanedSegments: segments }; 
+  } catch (error: any) {
+    console.error("❌ Error cleaning transcript with Gemini:", error.message || error);
+    return { 
+      cleanedFullText: rawFullText, 
+      cleanedSegments: segments, 
+      summary: "", 
+      keywords: [] 
+    }; 
   }
 }
